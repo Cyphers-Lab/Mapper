@@ -113,30 +113,24 @@ async def run_scan(args) -> None:
         config = load_config(args.config) if hasattr(args, 'config') else {}
         evasion_config = config.get('evasion', {})
         
-        # Initialize scanners with proper concurrency limit and evasion settings
-        max_concurrent = max(1, min(args.concurrent, 5000))
-        
-        # Determine evasion settings (command line args override config file)
-        use_evasion = args.evasion if hasattr(args, 'evasion') else evasion_config.get('enabled', False)
-        timing_profile = args.timing_profile if hasattr(args, 'timing_profile') else evasion_config.get('timing_profile', 'normal')
-        
+        # Force optimized settings regardless of command line args
         tcp_scanner = TCPScanner(
-            max_concurrent_scans=max_concurrent,
-            timeout=args.timeout,
-            use_evasion=use_evasion,
-            timing_profile=timing_profile
+            max_concurrent_scans=50000,  # Maximum concurrent scans
+            timeout=0.1,                 # Minimal timeout
+            use_evasion=False,          # Disable evasion for speed
+            timing_profile='aggressive', # Aggressive timing
+            fast_mode=True              # Force fast mode
         )
         
         if args.udp:
-            udp_scanner = UDPScanner(max_concurrent_scans=max_concurrent, timeout=args.timeout)
+            udp_scanner = UDPScanner(max_concurrent_scans=50000, timeout=0.1)
         
         print(f"Starting port scan on {len(ips)} IP address(es)...")
         print(f"Scanning {'common ports' if ports is None else f'{len(ports)} specified ports'}")
-        print(f"Maximum concurrent scans: {max_concurrent}")
+        print(f"Maximum concurrent scans: 50000")
         print(f"Protocols: {'TCP, UDP' if args.udp else 'TCP'}")
-        print(f"Evasion techniques: {'Enabled' if use_evasion else 'Disabled'}")
-        if use_evasion:
-            print(f"Timing profile: {timing_profile}")
+        print("Evasion techniques: Disabled")
+        print("Timing profile: aggressive")
         print("Results will be stored in scan_results.db\n")
         
         # Run TCP scan
@@ -187,10 +181,10 @@ async def main():
     scan_parser = subparsers.add_parser('scan', help='Run an immediate port scan')
     scan_parser.add_argument('ips', help='IP addresses to scan (comma-separated)')
     scan_parser.add_argument('-p', '--ports', help='Ports to scan (e.g., 80,443,8000-8080)')
-    scan_parser.add_argument('-c', '--concurrent', type=int, default=1000,
-                        help='Maximum concurrent scans (default: 1000)')
-    scan_parser.add_argument('-t', '--timeout', type=float, default=1.0,
-                        help='Timeout in seconds for each port scan (default: 1.0)')
+    scan_parser.add_argument('-c', '--concurrent', type=int, default=50000,
+                        help='Maximum concurrent scans (default: 50000)')
+    scan_parser.add_argument('-t', '--timeout', type=float, default=0.1,
+                        help='Timeout in seconds for each port scan (default: 0.1)')
     scan_parser.add_argument('-o', '--output', type=str,
                         help='Export results to file')
     scan_parser.add_argument('-f', '--format', choices=['csv', 'json', 'xml'],

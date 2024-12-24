@@ -3,13 +3,13 @@ schedule:
   time: "00:00"   # For daily scans
 
 evasion:
-  enabled: true   # Enable/disable evasion techniques
-  timing_profile: "normal"  # paranoid, sneaky, normal, aggressive
-  decoy_count: 3  # Number of decoy IPs to use
-  fragment_size: 380  # Size of packet fragments
-  randomize_targets: true  # Randomize scan order
-  min_delay: 0.1  # Minimum delay between scans (seconds)
-  max_delay: 1.0  # Maximum delay between scans (seconds)
+  enabled: false  # Disable evasion for maximum speed
+  timing_profile: "aggressive"
+  decoy_count: 0  # No decoys
+  fragment_size: 5000  # Increased fragment size
+  randomize_targets: false  # Disable randomization
+  min_delay: 0.0  # No delays
+  max_delay: 0.0  # No delays
 
 targets:
   - ip: 192.168.1.1
@@ -35,6 +35,12 @@ notifications:
     headers:
       Authorization: Bearer your-token
       Content-Type: application/json
+
+scanning:
+  fast_mode: true      # Force fast mode
+  max_retries: 1       # Single retry only
+  batch_size: 5000     # Increased batch size
+  max_concurrent: 50000 # Increased concurrent scans
 
 alert_conditions:
   new_ports: true       # Alert on newly opened ports

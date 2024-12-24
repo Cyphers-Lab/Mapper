@@ -1,192 +1,172 @@
+"""UDP port scanner implementation"""
 import asyncio
-from scapy.all import sr1, IP, UDP, ICMP
-from typing import List, Set
-from database.db import Database
-from utils.enrichment import ServiceEnrichment
-from .tcp import TCPScanner  # Reuse TCP scanner's IP info gathering methods
+import socket
+from typing import List, Optional
+from scapy.all import IP, UDP, send, sr1, ICMP
+from database import Database
+from .base import BaseScanner
+from .models import ScanConfig, ScanResult
+from .evasion import ScanEvasion
 
-class UDPScanner:
-    def __init__(self, max_concurrent_scans: int = 1000, timeout: float = 2.0):
-        self.max_concurrent_scans = max_concurrent_scans
-        self.timeout = timeout
-        self.semaphore = asyncio.Semaphore(max_concurrent_scans)
+class UDPScanner(BaseScanner):
+    def __init__(self, config: ScanConfig = None):
+        config = config or ScanConfig()
+        super().__init__(config.max_concurrent_scans, config.timeout)
+        self.config = config
+        self.evasion = ScanEvasion() if config.use_evasion else None
         self.db = Database()
-        self.enrichment = ServiceEnrichment()
 
-    @staticmethod
-    def get_common_ports() -> Set[int]:
-        """Return a set of commonly used UDP ports"""
-        return {
-            53,    # DNS
-            67,    # DHCP Server
-            68,    # DHCP Client
-            69,    # TFTP
-            123,   # NTP
-            137,   # NetBIOS Name Service
-            138,   # NetBIOS Datagram Service
-            161,   # SNMP
-            162,   # SNMP Trap
-            500,   # IKE (VPN)
-            514,   # Syslog
-            520,   # RIP
-            1194,  # OpenVPN
-            1434,  # MSSQL Browser
-            1900,  # UPNP
-            5353,  # mDNS
-            27015  # Source Engine Games
-        }
-
-    async def scan_udp_port(self, ip: str, port: int, hostname: str, isp: str, os: str, mac_address: str) -> None:
+    async def scan_port(self, ip: str, port: int, hostname: str, isp: str, os: str, mac_address: str) -> Optional[ScanResult]:
         """Scan a single UDP port"""
         async with self.semaphore:
             try:
-                # Send UDP packet and wait for response
-                response = sr1(
-                    IP(dst=ip)/UDP(dport=port),
-                    timeout=self.timeout,
-                    verbose=0
-                )
+                port_status = "closed"
+                service = "Unknown"
 
-                # Get enrichment data regardless of port status
-                enrichment_data = await self.enrichment.enrich_scan_result(ip, "UDP Service")
+                if self.evasion:
+                    try:
+                        # Get local IP for proper response matching
+                        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        s.connect(("8.8.8.8", 80))
+                        src_ip = s.getsockname()[0]
+                        s.close()
 
-                if response is None:
-                    # No response could mean open or filtered - skip saving filtered results
-                    status = "open|filtered"
-                    print(f"UDP Port {port} is {status} on {ip}")
-                    # Skip saving filtered results
-                elif response.haslayer(ICMP):
-                    # ICMP Port Unreachable means port is closed
-                    status = "closed" if response[ICMP].type == 3 and response[ICMP].code == 3 else "filtered"
-                    # Only save if not filtered
-                    if status != "filtered":
-                        await self.db.insert_scan_result(
-                        ip=ip,
-                        port=port,
-                        protocol="UDP",
-                        scan_status=status,
-                        service="Unknown",
-                        os=os,
-                        hostname=hostname,
-                        mac_address=mac_address,
-                        cve_data=None,
-                        # IP-API fields
-                        geo_status=enrichment_data["geo_status"],
-                        geo_message=enrichment_data["geo_message"],
-                        continent=enrichment_data["continent"],
-                        continent_code=enrichment_data["continent_code"],
-                        country=enrichment_data["country"],
-                        country_code=enrichment_data["country_code"],
-                        region=enrichment_data["region"],
-                        region_name=enrichment_data["region_name"],
-                        city=enrichment_data["city"],
-                        district=enrichment_data["district"],
-                        zip_code=enrichment_data["zip_code"],
-                        latitude=enrichment_data["latitude"],
-                        longitude=enrichment_data["longitude"],
-                        timezone=enrichment_data["timezone"],
-                        offset=enrichment_data["offset"],
-                        currency=enrichment_data["currency"],
-                        isp=enrichment_data["isp"],
-                        org=enrichment_data["org"],
-                        as_number=enrichment_data["as_number"],
-                        as_name=enrichment_data["as_name"],
-                        reverse_dns=enrichment_data["reverse_dns"],
-                        is_mobile=enrichment_data["is_mobile"],
-                        is_proxy=enrichment_data["is_proxy"],
-                        is_hosting=enrichment_data["is_hosting"],
-                        query_ip=enrichment_data["query_ip"],
-                        geo_location=enrichment_data["geo_location"]
-                    )
+                        # Create and send UDP probe packet
+                        udp_packet = self.evasion.craft_custom_packet(
+                            ip, port, src_ip=src_ip, protocol="UDP"
+                        )
+                        
+                        # Send packet and wait for response
+                        response = sr1(udp_packet, timeout=self.timeout, verbose=0)
+                        
+                        if response is None:
+                            # No response could mean open or filtered
+                            port_status = "open|filtered"
+                        elif response.haslayer(ICMP):
+                            # ICMP port unreachable means closed
+                            if response[ICMP].type == 3 and response[ICMP].code == 3:
+                                port_status = "closed"
+                            else:
+                                port_status = "filtered"
+                        else:
+                            # Any response is good
+                            port_status = "open"
+                            
+                    except (socket.error, PermissionError):
+                        port_status = await self._fallback_scan(ip, port)
                 else:
-                    # Got a UDP response - port is open
-                    await self.db.insert_scan_result(
+                    port_status = await self._fallback_scan(ip, port)
+
+                # Only attempt service detection if port might be open
+                if port_status in ["open", "open|filtered"]:
+                    service = self.detect_service(ip, port, self.timeout)
+
+                # Create scan result if not filtered
+                if port_status != "filtered":
+                    return await ScanResult.create(
                         ip=ip,
                         port=port,
                         protocol="UDP",
-                        scan_status="open",
-                        service="Unknown",
+                        scan_status=port_status,
+                        service=service,
                         os=os,
                         hostname=hostname,
-                        mac_address=mac_address,
-                        cve_data=None,
-                        # IP-API fields
-                        geo_status=enrichment_data["geo_status"],
-                        geo_message=enrichment_data["geo_message"],
-                        continent=enrichment_data["continent"],
-                        continent_code=enrichment_data["continent_code"],
-                        country=enrichment_data["country"],
-                        country_code=enrichment_data["country_code"],
-                        region=enrichment_data["region"],
-                        region_name=enrichment_data["region_name"],
-                        city=enrichment_data["city"],
-                        district=enrichment_data["district"],
-                        zip_code=enrichment_data["zip_code"],
-                        latitude=enrichment_data["latitude"],
-                        longitude=enrichment_data["longitude"],
-                        timezone=enrichment_data["timezone"],
-                        offset=enrichment_data["offset"],
-                        currency=enrichment_data["currency"],
-                        isp=enrichment_data["isp"],
-                        org=enrichment_data["org"],
-                        as_number=enrichment_data["as_number"],
-                        as_name=enrichment_data["as_name"],
-                        reverse_dns=enrichment_data["reverse_dns"],
-                        is_mobile=enrichment_data["is_mobile"],
-                        is_proxy=enrichment_data["is_proxy"],
-                        is_hosting=enrichment_data["is_hosting"],
-                        query_ip=enrichment_data["query_ip"],
-                        geo_location=enrichment_data["geo_location"]
+                        mac_address=mac_address
                     )
-                    print(f"UDP Port {port} is open on {ip}")
+                return None
 
             except Exception as e:
-                status = f"error: {str(e)}"
-                # Only save actual errors, not filtered results
-                if not "filtered" in status.lower():
-                    await self.db.insert_scan_result(
-                        ip=ip,
-                        port=port,
-                        protocol="UDP",
-                        scan_status=f"error: {str(e)}",
-                        service="Unknown",
-                        os=os,
-                        hostname=hostname,
-                        mac_address=mac_address,
-                        cve_data=None
-                )
+                print(f"Error scanning UDP {ip}:{port} - {str(e)}")
+                return None
 
-    async def scan_ports(self, ip: str, ports: List[int] = None) -> None:
-        """Scan multiple UDP ports on the specified IP"""
-        # Reuse TCP scanner's host discovery and info gathering
-        if not TCPScanner.is_host_up(ip):
-            print(f"Note: Host {ip} did not respond to ICMP ping, continuing with scan...")
-
-        hostname, isp, mac_address = TCPScanner.get_ip_info(ip)
-        os = TCPScanner.detect_os(ip)
-        print(f"UDP Scanning {ip} ({hostname}, {isp}, MAC: {mac_address}, OS: {os})...")
-
+    async def scan_ports(self, ip: str, ports: List[int] = None) -> List[ScanResult]:
+        """Scan multiple UDP ports"""
         if ports is None:
-            ports = self.get_common_ports()
+            ports = list(self.get_common_ports())
 
-        tasks = [
-            self.scan_udp_port(ip, port, hostname, isp, os, mac_address)
-            for port in ports
-        ]
-        await asyncio.gather(*tasks)
+        # Get basic host information first
+        hostname, isp, mac_address = self.get_ip_info(ip)
+        os = self.detect_os(ip)
+
+        # Process ports in chunks
+        chunk_size = 1000  # Smaller chunks for UDP
+        results = []
+        
+        for i in range(0, len(ports), chunk_size):
+            chunk = ports[i:i + chunk_size]
+            scan_tasks = []
+            
+            for port in chunk:
+                scan_tasks.append(
+                    self.scan_port(ip, port, hostname, isp, os, mac_address)
+                )
+            
+            if scan_tasks:
+                chunk_results = await asyncio.gather(*scan_tasks)
+                results.extend([r for r in chunk_results if r is not None])
+                
+                # Batch insert results
+                try:
+                    print(f"Saving batch of {len(results)} UDP results...")
+                    await self.db.insert_scan_results_batch([r.to_dict() for r in results])
+                    results = []  # Clear results after successful save
+                except Exception as e:
+                    print(f"Error saving UDP results batch: {str(e)}")
+
+        return results
 
     async def scan_multiple_ips(self, ips: List[str], ports: List[int] = None) -> None:
-        """Scan multiple IPs concurrently"""
+        """Scan multiple IPs for UDP ports"""
         try:
+            print("Initializing database for UDP scan...")
             await self.db.init_db()
-            tasks = [self.scan_ports(ip, ports) for ip in ips]
-            await asyncio.gather(*tasks)
+            print(f"Starting UDP scan of {len(ips)} IPs...")
+            
+            # Randomize target order if evasion is enabled
+            if self.evasion:
+                ips = self.evasion.randomize_targets(ips)
+            
+            # Process IPs sequentially
+            for ip in ips:
+                print(f"\nScanning UDP ports on IP: {ip}")
+                try:
+                    results = await self.scan_ports(ip, ports)
+                    if results:
+                        print(f"Found {len(results)} open/filtered UDP ports on {ip}")
+                    else:
+                        print(f"No open UDP ports found on {ip}")
+                except Exception as e:
+                    print(f"Error scanning UDP ports on {ip}: {str(e)}")
+                    continue
+                
         except Exception as e:
             print(f"Error during multi-IP UDP scan: {str(e)}")
             raise
         finally:
-            await self.close()
+            print("Closing database connection...")
+            await self.db.close()
 
-    async def close(self) -> None:
-        """Clean up resources"""
-        await self.db.close()
+    async def _fallback_scan(self, ip: str, port: int) -> str:
+        """Fallback UDP scanning using basic socket"""
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(self.timeout)
+            
+            # Send empty UDP datagram
+            sock.sendto(b"", (ip, port))
+            
+            # Wait for response
+            try:
+                sock.recvfrom(1024)
+                return "open"
+            except socket.timeout:
+                return "open|filtered"
+            except ConnectionRefusedError:
+                return "closed"
+                
+        except Exception:
+            return "error"
+        finally:
+            if sock:
+                sock.close()
