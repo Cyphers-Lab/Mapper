@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Topology</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.21.2/cytoscape.min.js"></script>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="filters">
+      <input type="text" id="ip-filter" placeholder="Filter by IP">
+      <input type="text" id="service-filter" placeholder="Filter by Service">
+      <input type="number" id="port-filter" placeholder="Filter by Port">
+      <select id="protocol-filter">
+        <option value="">All Protocols</option>
+        <option value="tcp">TCP</option>
+        <option value="udp">UDP</option>
+      </select>
+      <button id="apply-filters">Apply Filters</button>
+      <button id="reset-filters">Reset</button>
+    </div>
+    <div class="actions">
+      <button id="toggle-dark-mode">Toggle Dark Mode</button>
+      <button id="toggle-clustering">Toggle Clustering</button>
+      <button id="export-image">Export as Image</button>
+      <button id="export-json">Export as JSON</button>
+    </div>
+  </div>
+  
+  <h1>Network Topology</h1>
+  <div id="cy"></div>
+
+  <!-- Context Menu -->
+  <div class="context-menu">
+    <ul>
+      <li id="highlight-connections">Highlight Connections</li>
+      <li id="isolate-node">Isolate Node</li>
+      <li id="reset-view">Reset View</li>
+    </ul>
+  </div>
+  
+  <script src="/script.js"></script>
+</body>
+</html>

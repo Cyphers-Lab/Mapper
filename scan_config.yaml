@@ -1,0 +1,43 @@
+schedule:
+  interval: daily  # daily, hourly, or cron expression
+  time: "00:00"   # For daily scans
+
+evasion:
+  enabled: true   # Enable/disable evasion techniques
+  timing_profile: "normal"  # paranoid, sneaky, normal, aggressive
+  decoy_count: 3  # Number of decoy IPs to use
+  fragment_size: 380  # Size of packet fragments
+  randomize_targets: true  # Randomize scan order
+  min_delay: 0.1  # Minimum delay between scans (seconds)
+  max_delay: 1.0  # Maximum delay between scans (seconds)
+
+targets:
+  - ip: 192.168.1.1
+    ports: [80, 443, 8080]  # Optional, uses common ports if not specified
+  - ip: 10.0.0.0/24
+    ports: [22, 80, 443]
+
+notifications:
+  email:
+    enabled: false
+    smtp_server: smtp.gmail.com
+    smtp_port: 587
+    username: your-email@gmail.com
+    password: your-app-password  # Use app-specific password for Gmail
+    from_address: your-email@gmail.com
+    to_addresses:
+      - admin@example.com
+      - security@example.com
+
+  webhook:
+    enabled: false
+    url: https://hooks.example.com/security
+    headers:
+      Authorization: Bearer your-token
+      Content-Type: application/json
+
+alert_conditions:
+  new_ports: true       # Alert on newly opened ports
+  closed_ports: true    # Alert on previously open ports that are now closed
+  service_changes: true # Alert on service changes (e.g., different version)
+  critical_vulnerabilities: true  # Alert on CVEs with score >= 9.0
